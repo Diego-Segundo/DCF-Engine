@@ -7,6 +7,7 @@
 #include<netdb.h>
 #include<arpa/inet.h>
 #include<poll.h>
+#include<errno.h>
 #define PORT "8080"
 /* This file contains the server-setup, polling structure initialization, interface setup and managment with custom backend python service,
  client connection establishment/handalment, and DCF model utilization.*/
@@ -26,15 +27,13 @@ void add_to_pfds(struct pollfd **pfds, int new_fd, int *fd_count, int *fd_size)
 
     if (*fd_count == *fd_size){
         *fd_size *= 2;
-        struct pollfd *tmpPtr = *pfds; 
-        *pfds = realloc(*pfds, sizeof(**pfds) * (*fd_size));
+        struct pollfd *tmpPtr = realloc(*pfds, sizeof(**pfds) * (*fd_size));
 
-        if (*pfds == NULL){
+        if (tmpPtr == NULL){
             perror("realloc");
-            *pfds = tmpPtr;
-
-            close(new_fd); 
+            return;
         }
+        *pfds = tmpPtr;
     }
 
     (*pfds)[*fd_count].fd = new_fd;
@@ -98,7 +97,61 @@ int get_listener_socket(void)
     return  listeningSock;
 
 }
+void setup_incomming_connection(struct pollfd pfds[], int listeningSock, int *fd_count, int *fd_size, int idx)
+{
+    int newfd = 0; 
+    struct sockaddr_storage client_addr;
+    char ipaddr[INET6_ADDRSTRLEN]; //ip info buff
+    socklen_t addrlen;
+    memset(ipaddr, 0, INET6_ADDRSTRLEN);
+    
+    
+    addrlen = sizeof(client_addr);
+    if ((newfd = accept(listeningSock, (struct sockaddr *)&client_addr, &addrlen)) < 0){
+        perror("accept");
+    } else {
+            add_to_pfds(&pfds, newfd, fd_count, fd_size);
+            printf("server: new connection from: %s on"
+            "socket: %d", inet_ntop(client_addr.ss_family, get_in_addr((struct sockaddr *)&client_addr), ipaddr, INET6_ADDRSTRLEN), newfd);
+           } 
+}
 
+int read_incomming_date(struct pollfd pfds[], char buff[], int *fd_count, int i)
+{
+                    //Its a Client sending data
+                    int sender_fd = pfds[i].fd; 
+                    int nbytes = 0, nRead = 0, message_length = 0;
+                    nbytes = recv(sender_fd, buff, 1024, 0); 
+                    if (nbytes <= 0){
+                        if (nbytes == 0){
+                            // Connection closed
+                            printf("server: Client with socket: %d hung up\n", sender_fd);
+                        }else{
+                            perror("revc");
+                        }
+                        del_from_pfds(pfds, fd_count, i);
+                        close(sender_fd);
+                        return 0;
+                    }else{
+                        message_length = atoi(buff);
+                        memset(buff, 0, 1024);
+                        while(nRead < message_length && nRead < 1024){
+                             if ((nbytes = recv(sender_fd, buff + nRead, 1024 - nRead, 0)) <= 0){
+                                if (nbytes == 0){
+                                // Connection closed
+                                printf("server: Client with socket: %d hung up\n", sender_fd);
+                            }else{
+                                perror("revc");
+                            }
+                            break;
+                        }
+                            nRead += nbytes; 
+                        }
+                        nRead = 0;
+                        
+                    }
+                    return message_length;
+}
 
 // Server start-up
 int main(int argc, char *argv[])
@@ -108,19 +161,21 @@ int main(int argc, char *argv[])
     void add_to_pfds(struct pollfd **pfds, int new_fd, int *fd_count, int *fd_size);
     void del_from_pfds(struct pollfd pfds[], int *fd_count, int idx);
     int get_listener_socket();
-
+    void setup_incomming_connection(struct pollfd pfds[], int listeningSock, int *fd_count, int *fd_size, int idx);
+    int read_incomming_date(struct pollfd pfds[], char buff[], int *fd_count, int idx);
     int listeningSock, newfd, sender_fd, fd_count, fd_size; 
-    struct sockaddr_storage client_addr;
-    socklen_t addrlen;
-    char buff[1024]; //msg buff
-    char ipaddr[INET6_ADDRSTRLEN]; //ip info buff
+    char *buff = calloc(1024, sizeof(char)); //msg buff
 
     memset(buff, 0, 1024);
-    memset(ipaddr, 0, INET6_ADDRSTRLEN);
    
     fd_count = 0;
     fd_size = 5;  
     struct pollfd *pfds = malloc(sizeof(struct pollfd) * fd_size);
+
+    if (pfds == NULL){
+        perror("malloc");
+        exit(EXIT_FAILURE);
+    }
     memset(pfds, 0, sizeof(*pfds) * fd_size);
     
     listeningSock = get_listener_socket();
@@ -131,51 +186,31 @@ int main(int argc, char *argv[])
     add_to_pfds(&pfds,listeningSock, &fd_count, &fd_size);
 
     while(1){
-        int polled_events = poll(pfds, fd_size, -1); // Continue checking for new events 
-        if (polled_events < 0){
-            perror("poll");
-            exit(EXIT_FAILURE);
-        }
-
+        int polled_events = 0;
+        // polled_events = poll(pfds, fd_size, -1); // Continue checking for new events 
+        // if (polled_events < 0){
+        //     perror("poll");
+        //     exit(EXIT_FAILURE);
+        do {
+            polled_events= poll(pfds, fd_count, -1); // Continue checking for new events
+        } while (polled_events == -1 && errno == EINTR);
+       
         for (int i = 0; i < fd_count; i++){
+            memset(buff, 0, strlen(buff));
             if (pfds[i].revents & POLLIN){
                 if (pfds[i].fd == listeningSock){
-                    addrlen = sizeof(client_addr);
-                   if ((newfd = accept(listeningSock, (struct sockaddr *)&client_addr, &addrlen)) < 0){
-                        perror("accept");
-                   } else{
-                        add_to_pfds(&pfds, newfd, &fd_count, &fd_size);
-
-                        printf("server: new connection from: %s on"
-                                "socket: %d", inet_ntop(client_addr.ss_family, get_in_addr((struct sockaddr *)&client_addr), ipaddr, INET6_ADDRSTRLEN), newfd);
-                   }
+                    setup_incomming_connection(pfds, listeningSock, &fd_count, &fd_size, i);
                 } else{
-                    //Its a Client sending data
+                     int message_length = read_incomming_date(pfds, buff, &fd_count, i);
                     sender_fd = pfds[i].fd; 
-                    int nbytes = 0, nRead = 0, message_length = 0;
-                    if ((nbytes = recv(sender_fd, buff, sizeof(buff), 0)) < 0){
-                        if (nbytes == 0){
-                            // Connection closed
-                            printf("server: Client with socket: %d hung up\n", sender_fd);
-                        }else{
-                            perror("revc");
-                        }
-                        del_from_pfds(pfds, &fd_count, i);
-                        close(sender_fd);
-                    }else{
-                        message_length = atoi(buff);
-                        while(nRead < message_length){
-                            int nbytes = recv(sender_fd, buff + nRead, sizeof(buff) - nRead, 0); //stackover flow very likely need either a dynamically growing array or custom handler func
-                            nRead += nbytes; 
-                        }
-                    }
-
                     for (int j = 0; j < fd_count; j++){
-                        if (pfds[j].fd != listeningSock && pfds[j].fd != sender_fd){
+                        if (pfds[i].fd >= 0 && pfds[j].fd != listeningSock && pfds[j].fd != sender_fd){
                             if ((send(pfds[j].fd, buff, message_length + 1, 0)) < 0){
                                 perror("send");
                             }
                             
+                        } else{
+                            fprintf(stderr, "invalid file descriptor %d\n", pfds[i].fd);
                         }
                     }
 
@@ -184,6 +219,8 @@ int main(int argc, char *argv[])
         }
 
     }
+    free(buff);
+    free(pfds);
         
     return 0;
 }
