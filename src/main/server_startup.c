@@ -186,13 +186,8 @@ int main(int argc, char *argv[])
     add_to_pfds(&pfds,listeningSock, &fd_count, &fd_size);
 
     while(1){
-        int polled_events = 0;
-        // polled_events = poll(pfds, fd_size, -1); // Continue checking for new events 
-        // if (polled_events < 0){
-        //     perror("poll");
-        //     exit(EXIT_FAILURE);
         do {
-            polled_events= poll(pfds, fd_count, -1); // Continue checking for new events
+            int polled_events= poll(pfds, fd_count, -1); // Continue checking for new events
         } while (polled_events == -1 && errno == EINTR);
        
         for (int i = 0; i < fd_count; i++){
