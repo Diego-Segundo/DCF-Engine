@@ -27,15 +27,15 @@ void add_to_pfds(struct pollfd **pfds, int new_fd, int *fd_count, int *fd_size)
 
     if (*fd_count == *fd_size){
         *fd_size *= 2;
-        struct pollfd *tmpPtr = realloc(*pfds, sizeof(**pfds) * (*fd_size));
-
+        struct pollfd *tmpPtr = realloc(*pfds, sizeof(struct pollfd) * (*fd_size));
+        
         if (tmpPtr == NULL){
             perror("realloc");
             return;
         }
         *pfds = tmpPtr;
     }
-
+   
     (*pfds)[*fd_count].fd = new_fd;
     (*pfds)[*fd_count].events = POLLIN;
     (*fd_count)++;
@@ -97,7 +97,7 @@ int get_listener_socket(void)
     return  listeningSock;
 
 }
-void setup_incomming_connection(struct pollfd pfds[], int listeningSock, int *fd_count, int *fd_size, int idx)
+void setup_incomming_connection(struct pollfd *pfds[], int listeningSock, int *fd_count, int *fd_size, int idx)
 {
     int newfd = 0; 
     struct sockaddr_storage client_addr;
@@ -110,9 +110,8 @@ void setup_incomming_connection(struct pollfd pfds[], int listeningSock, int *fd
     if ((newfd = accept(listeningSock, (struct sockaddr *)&client_addr, &addrlen)) < 0){
         perror("accept");
     } else {
-            add_to_pfds(&pfds, newfd, fd_count, fd_size);
-            printf("server: new connection from: %s on"
-            "socket: %d", inet_ntop(client_addr.ss_family, get_in_addr((struct sockaddr *)&client_addr), ipaddr, INET6_ADDRSTRLEN), newfd);
+            add_to_pfds(pfds, newfd, fd_count, fd_size);
+            printf("server: new connection from: %s on socket: %d\n", inet_ntop(client_addr.ss_family, get_in_addr((struct sockaddr *)&client_addr), ipaddr, INET6_ADDRSTRLEN), newfd);
            } 
 }
 
@@ -134,6 +133,7 @@ int read_incomming_date(struct pollfd pfds[], char buff[], int *fd_count, int i)
                         return 0;
                     }else{
                         message_length = atoi(buff);
+                        buff[nbytes] = '\0';
                         memset(buff, 0, 1024);
                         while(nRead < message_length && nRead < 1024){
                              if ((nbytes = recv(sender_fd, buff + nRead, 1024 - nRead, 0)) <= 0){
@@ -145,10 +145,10 @@ int read_incomming_date(struct pollfd pfds[], char buff[], int *fd_count, int i)
                             }
                             break;
                         }
-                            nRead += nbytes; 
+                            nRead += nbytes;
                         }
+                        buff[nRead] = '\0';
                         nRead = 0;
-                        
                     }
                     return message_length;
 }
@@ -161,8 +161,9 @@ int main(int argc, char *argv[])
     void add_to_pfds(struct pollfd **pfds, int new_fd, int *fd_count, int *fd_size);
     void del_from_pfds(struct pollfd pfds[], int *fd_count, int idx);
     int get_listener_socket();
-    void setup_incomming_connection(struct pollfd pfds[], int listeningSock, int *fd_count, int *fd_size, int idx);
+    void setup_incomming_connection(struct pollfd *pfds[], int listeningSock, int *fd_count, int *fd_size, int idx);
     int read_incomming_date(struct pollfd pfds[], char buff[], int *fd_count, int idx);
+    
     int listeningSock, newfd, sender_fd, fd_count, fd_size; 
     char *buff = calloc(1024, sizeof(char)); //msg buff
 
@@ -186,6 +187,18 @@ int main(int argc, char *argv[])
     add_to_pfds(&pfds,listeningSock, &fd_count, &fd_size);
 
     while(1){
+        
+        int polled_events;// Continue checking for new events 
+        // if (polled_events < 0){
+        //         if (polled_events == -1 && errno == EINTR){
+        //             printf("A signal interruped the sys call. Try again\n"); 
+        //             continue;
+        //         } else{
+        //             perror("poll");
+        //             exit(EXIT_FAILURE);
+        //             break;
+        //         }
+        // } 
         do {
             int polled_events= poll(pfds, fd_count, -1); // Continue checking for new events
         } while (polled_events == -1 && errno == EINTR);
@@ -194,19 +207,17 @@ int main(int argc, char *argv[])
             memset(buff, 0, strlen(buff));
             if (pfds[i].revents & POLLIN){
                 if (pfds[i].fd == listeningSock){
-                    setup_incomming_connection(pfds, listeningSock, &fd_count, &fd_size, i);
+                    setup_incomming_connection(&pfds, listeningSock, &fd_count, &fd_size, i);
                 } else{
-                     int message_length = read_incomming_date(pfds, buff, &fd_count, i);
+                    int message_length = read_incomming_date(pfds, buff, &fd_count, i);
                     sender_fd = pfds[i].fd; 
                     for (int j = 0; j < fd_count; j++){
-                        if (pfds[i].fd >= 0 && pfds[j].fd != listeningSock && pfds[j].fd != sender_fd){
-                            if ((send(pfds[j].fd, buff, message_length + 1, 0)) < 0){
+                        if (pfds[j].fd >= 0 && pfds[j].fd != listeningSock && pfds[j].fd != sender_fd){
+                            if (send(pfds[j].fd, buff, message_length + 1, 0) < 0){
                                 perror("send");
-                            }
-                            
-                        } else{
-                            fprintf(stderr, "invalid file descriptor %d\n", pfds[i].fd);
-                        }
+                                fprintf(stderr, "invalid file descriptor %d\n", pfds[j].fd);
+                            } 
+                        } 
                     }
 
                 }
