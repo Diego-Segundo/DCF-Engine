@@ -169,22 +169,149 @@ int read_incomming_data(struct pollfd pfds[], char buff[], int *fd_count, int i)
             total_read += nbytes;
         }
         buff[total_read] = '\0';
+        message_length = total_read;
         total_read = 0;
     }
     return message_length;
 }
 // Request stock ticket closing price from python server
 int req_stock_data(int server_fd, char buff[]){
+    int process_and_store_financial_data(char buff[], int capacity);
+    int data_read = 0, total_data_read = 0, capacity = 0;
         if ((send(server_fd, buff, strlen(buff) - 1 , 0)) < 0){
             perror("Msg not sent to server");
             return -1;
-        } else{
-            if ((recv(server_fd, buff, 1024, 0)) < 0){
+        } 
+        if ((recv(server_fd, buff, 1024, 0)) < 0){
+            perror("failed to read server data");
+            return -1;
+        }
+        int msg_size = atoi(buff);
+        memset(buff, 0, sizeof(*buff));
+        while(total_data_read != msg_size){
+            if ((data_read = recv(server_fd, buff + total_data_read, 1024 - total_data_read - 1, 0)) < 0){
                 perror("failed to read server data");
                 return -1;
             }
-        } 
-        return 0;
+            total_data_read += data_read;
+        }
+        process_and_store_financial_data(buff, total_data_read);
+        return msg_size;
+}
+int process_and_store_financial_data(char buff[], int capacity){
+    double rev[4] = {0}, costOfRev[4] = {0}, OptExp[4] = {0}, depreciation[4] = {0}, taxRate[4] = {0}, capEx[4] = {0}, nwc[4] = {0}, number;
+    int size = 0, done = 1;
+    int buff_length = strlen(buff);
+    char tmpBuff[buff_length];
+    strcpy(tmpBuff, buff);
+    int financial_component = 1; 
+    char *endptr;
+    char *token = strtok(tmpBuff, ","); 
+    while (done == 1){
+        switch (financial_component){
+            case 1:
+                if (*token == '#'){
+                    financial_component += 1;
+                    size = 0;
+                    token = strtok(NULL, ",");
+                    break;
+                }
+                number = 0;
+                number = strtod(token, &endptr);
+                rev[size] =  number;
+                size++; 
+                token = strtok(NULL, ",");
+                break;
+            case 2:
+                if (*token == '#'){
+                    financial_component += 1;
+                    size = 0;
+                    token = strtok(NULL, ",");
+                    break;
+                }
+                number = 0;
+                number = strtod(token, &endptr);
+                costOfRev[size] = number;
+                size++; 
+                token = strtok(NULL, ",");
+                break;
+            case 3:
+                if (*token == '#'){
+                    financial_component += 1;
+                    size = 0;
+                    token = strtok(NULL, ",");
+                    break;
+                }
+                number = 0;
+                number = strtod(token, &endptr);
+                OptExp[size] = number;
+                size++; 
+                token = strtok(NULL, ",");
+                break;
+            case 4:
+                if (*token == '#'){
+                    financial_component += 1;
+                    size = 0;
+                    token = strtok(NULL, ",");
+                    break;
+                }
+                number = 0;
+                number = strtod(token, &endptr);
+                depreciation[size] = number;
+                size++; 
+                token = strtok(NULL, ",");
+                break;
+            case 5:
+                if (*token == '#'){
+                    financial_component += 1;
+                    size = 0;
+                    token = strtok(NULL, ",");
+                    break;
+                }
+                number = 0;
+                number = strtod(token, &endptr);
+                taxRate[size] = number;
+                size++; 
+                token = strtok(NULL, ",");
+                break;
+            case 6:
+                if (*token == '#'){
+                    financial_component += 1;
+                    size = 0;
+                    token = strtok(NULL, ",");
+                    break;
+                }
+                number = 0;
+                number = strtod(token, &endptr);
+                capEx[size] = number;
+                size++; 
+                token = strtok(NULL, ",");
+                break;
+            case 7:
+                if (token == NULL || *token == '#'){
+                    financial_component += 1;
+                    size = 0;
+                    token = strtok(NULL, ",");
+                    break;
+                }
+                number = 0;
+                number = strtod(token, &endptr);
+                nwc[size] = number;
+                size++; 
+                token = strtok(NULL, ",");
+                break;
+            case 8:
+                done = 0;
+                break;
+            default:
+                done = 0;
+                printf("Not a valid financial component\n");
+                break;
+        }
+    }
+    printf("Testing rev %lf\n", nwc[0]);
+    return 0;
+
 }
 
 // Server start-up
@@ -256,14 +383,15 @@ int main(int argc, char *argv[])
                     if (result == -1){
                         perror("bad request");
                         continue;
-                    } 
+                    }
+                    message_length = result; 
                     printf("Stock X price: %s\n", buff);
                     //TODO: read python result and save it in a custom string
                     //TODO: start a subprocess with the necessary data received from the. Return the fair value stock price along witht the pfds array index. For quick message reponses to clients.
                     sender_fd = pfds[i].fd; 
                     for (int j = 0; j < fd_count; j++){
                         if (pfds[j].fd >= 0 && pfds[j].fd != listeningSock && pfds[j].fd != sender_fd){
-                            if (send(pfds[j].fd, buff, 1024 - 1, 0) < 0){
+                            if (send(pfds[j].fd, buff, message_length, 0) < 0){
                                 perror("send");
                                 fprintf(stderr, "invalid file descriptor %d\n", pfds[j].fd);
                             } 
